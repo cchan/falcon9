@@ -1,71 +1,48 @@
 # Gym: https://github.com/openai/gym/blob/master/docs/environments.md
 # Torch: https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html
+# TRFL: https://github.com/udacity/deep-learning/blob/master/reinforcement/Q-learning-cart.ipynb https://medium.com/aureliantactics/basic-trfl-usage-ad2a7e1afdde
 
 import torch
 from collections import namedtuple
 import random
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
+
+EXPERIENCE_REPLAY_SIZE = 1000
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 Transition = namedtuple('Transition',
                         ('state', 'action', 'next_state', 'reward'))
 
-class ReplayMemory(object):
+# Memory for experience replay.
+from collections import deque
+memory = deque(maxlen=EXPERIENCE_REPLAY_SIZE)
+# memory.append( ... )
+# random.sample(memory, batch_size)
+# sample should be better than choice, since without replacement usually converges faster.
 
-    def __init__(self, capacity):
-        self.capacity = capacity
-        self.memory = []
-        self.position = 0
-
-    def push(self, *args):
-        """Saves a transition."""
-        if len(self.memory) < self.capacity:
-            self.memory.append(None)
-        self.memory[self.position] = Transition(*args)
-        self.position = (self.position + 1) % self.capacity
-
-    def sample(self, batch_size):
-        return random.sample(self.memory, batch_size)
-
-    def __len__(self):
-        return len(self.memory)
-
-class DQN(nn.Module):
-
-    def __init__(self, h, w, outputs):
-        super(DQN, self).__init__()
-        self.conv1 = nn.Conv2d(3, 16, kernel_size=5, stride=2)
-        self.bn1 = nn.BatchNorm2d(16)
-        self.conv2 = nn.Conv2d(16, 32, kernel_size=5, stride=2)
-        self.bn2 = nn.BatchNorm2d(32)
-        self.conv3 = nn.Conv2d(32, 32, kernel_size=5, stride=2)
-        self.bn3 = nn.BatchNorm2d(32)
-
-        # Number of Linear input connections depends on output of conv2d layers
-        # and therefore the input image size, so compute it.
-        def conv2d_size_out(size, kernel_size = 5, stride = 2):
-            return (size - (kernel_size - 1) - 1) // stride  + 1
-        convw = conv2d_size_out(conv2d_size_out(conv2d_size_out(w)))
-        convh = conv2d_size_out(conv2d_size_out(conv2d_size_out(h)))
-        linear_input_size = convw * convh * 32
-        self.head = nn.Linear(linear_input_size, outputs)
-
-    # Called with either one element to determine next action, or a batch
-    # during optimization. Returns tensor([[left0exp,right0exp]...]).
+# The Deep Q-Learning function approximator, which is just a fully connected neural net with ReLU, except sigmoid in the last layer.
+class FCN(nn.Module):
+    # First (input) size should be the observation size.
+    # Last (output) size should be the action space size.
+    def __init__(self, sizes):
+        super(FCN, self).__init__()
+        self.layers = [nn.Linear(curr, next) for curr, next in zip(sizes, sizes[1:])]
     def forward(self, x):
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = F.relu(self.bn2(self.conv2(x)))
-        x = F.relu(self.bn3(self.conv3(x)))
-        return self.head(x.view(x.size(0), -1))
+        for layer in self.layers[:-1]:
+            x = F.relu(layer(x))
+        return F.sigmoid(self.layers[-1](x))
+
 
 import gym
 env = gym.make('LunarLander-v2')
 
 for episode in range(1000):
   print("Starting episode", episode)
-  env.reset()
+  obs = env.reset()
+  reward = done = info = None
   env.render()
 
   for i in range(10000):
@@ -75,5 +52,5 @@ for episode in range(1000):
 
     if done:
       break
-    
+
 env.close()
