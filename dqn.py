@@ -11,7 +11,7 @@ import math
 import gym
 from itertools import count
 
-EXPERIENCE_REPLAY_SIZE = 1000
+EXPERIENCE_REPLAY_SIZE = 10000
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -32,7 +32,8 @@ class FCN(nn.Module):
     # Last (output) size should be the action space size.
     def __init__(self, sizes):
         super(FCN, self).__init__()
-        self.layers = [nn.Linear(a, b) for a, b in zip(sizes, sizes[1:])]
+        self.layers = nn.ModuleList([nn.Linear(curr, next)
+                                     for curr, next in zip(sizes, sizes[1:])])
 
     def forward(self, x):
         for layer in self.layers[:-1]:
@@ -50,8 +51,9 @@ EPS_DECAY = 200
 TARGET_UPDATE = 10
 
 # Get number of actions from gym action space
-n_obs = env.obs_space.n
+n_obs = 8  # posx, posy, velx, vely, angle, angleVel, leg1contact, leg2contact
 n_actions = env.action_space.n
+print(n_actions)
 
 policy_net = FCN([n_obs, 2 * (n_obs + n_actions), n_actions]).to(device)
 target_net = FCN([n_obs, 2 * (n_obs + n_actions), n_actions]).to(device)
@@ -61,25 +63,16 @@ target_net.eval()
 optimizer = optim.RMSprop(policy_net.parameters())
 
 
-def epsilon_greedy(state):
-    global epsilon_greedy_annealing_step
-    if epsilon_greedy_annealing_step is None:
-        epsilon_greedy_annealing_step = 0
-
+def epsilon_greedy(state, epsilon_greedy_annealing_step):
     eps_threshold = EPS_END + (EPS_START - EPS_END) * \
         math.exp(-1. * epsilon_greedy_annealing_step / EPS_DECAY)
 
-    epsilon_greedy_annealing_step += 1
-
     if random.random() > eps_threshold:
         with torch.no_grad():
-            # t.max(1) will return largest column value of each row.
-            # second column on max result is index of where max element was
-            # found, so we pick action with the larger expected reward.
-            return policy_net(state).max(1)[1].view(1, 1)
+            return torch.tensor([torch.argmax(policy_net(state))],
+                                device=device)
     else:
-        return torch.tensor([[random.randrange(n_actions)]], device=device,
-                            dtype=torch.long)
+        return torch.tensor([random.randrange(n_actions)], device=device)
 
 
 def optimize_model():
@@ -94,13 +87,13 @@ def optimize_model():
     # Compute a mask of non-final states and concatenate the batch elements
     # (a final state would've been the one after which simulation ended)
     non_final_mask = torch.tensor(tuple(map(lambda s: s is not None,
-                                            batch.next_state)), device=device,
+                                            batch.obs)), device=device,
                                   dtype=torch.uint8)
-    non_final_next_states = torch.cat([s for s in batch.next_state
+    non_final_next_states = torch.stack([s for s in batch.obs
                                        if s is not None])
-    state_batch = torch.cat(batch.state)
-    action_batch = torch.cat(batch.action)
-    reward_batch = torch.cat(batch.reward)
+    state_batch = torch.stack(batch.prev_obs, dim=1).transpose(0, 1)
+    action_batch = torch.stack(batch.action)
+    reward_batch = torch.stack(batch.reward)
 
     # Compute Q(s_t, a) - the model computes Q(s_t), then we select the
     # columns of actions taken. These are the actions which would've been taken
@@ -130,18 +123,24 @@ def optimize_model():
     optimizer.step()
 
 
+epsilon_greedy_annealing_step = 0
+
 for episode in range(1000):
-    prev_obs = env.reset()
+    prev_obs = torch.tensor(env.reset())
     reward = done = info = None
     env.render()
 
     for t in count():
-        action = epsilon_greedy(prev_obs)
-        obs, reward, done, _ = env.step(action)
-        env.render()
-        reward = torch.tensor([reward], device=device)
+        action = epsilon_greedy(prev_obs,
+                                epsilon_greedy_annealing_step)
+        epsilon_greedy_annealing_step += 1
 
-        memory.append(prev_obs, action, obs, reward)
+        obs, reward, done, _ = env.step(action.item())
+        env.render()
+        obs = torch.tensor(obs, device=device)
+        reward = torch.tensor([reward], device=device, dtype=torch.float)
+
+        memory.append((prev_obs, action, obs, reward))
         prev_obs = obs
 
         optimize_model()
