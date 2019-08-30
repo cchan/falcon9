@@ -38,7 +38,7 @@ class FCN(nn.Module):
     def forward(self, x):
         for layer in self.layers[:-1]:
             x = F.relu(layer(x))
-        return F.sigmoid(self.layers[-1](x))
+        return torch.sigmoid(self.layers[-1](x))
 
 
 env = gym.make('LunarLander-v2')
@@ -53,7 +53,6 @@ TARGET_UPDATE = 10
 # Get number of actions from gym action space
 n_obs = 8  # posx, posy, velx, vely, angle, angleVel, leg1contact, leg2contact
 n_actions = env.action_space.n
-print(n_actions)
 
 policy_net = FCN([n_obs, 2 * (n_obs + n_actions), n_actions]).to(device)
 target_net = FCN([n_obs, 2 * (n_obs + n_actions), n_actions]).to(device)
@@ -112,6 +111,7 @@ def optimize_model():
     expected_state_action_values = (next_state_values * GAMMA) + reward_batch
 
     # Compute Huber loss
+    # This will emit a warning about broadcasting, this is expected.
     loss = F.smooth_l1_loss(state_action_values,
                             expected_state_action_values.unsqueeze(1))
 
