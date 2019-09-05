@@ -10,7 +10,7 @@ import torch.optim as optim
 import math
 # import gym
 from itertools import count
-from dummyenv import DummyEnv
+from dummyenv import EchoEnv
 
 EXPERIENCE_REPLAY_SIZE = 10000
 
@@ -39,7 +39,7 @@ class FCN(nn.Module):
         return self.layers[-1](x)
 
 
-env = DummyEnv()
+env = EchoEnv()
 
 BATCH_SIZE = 128
 GAMMA = 0.999
@@ -49,15 +49,16 @@ EPS_DECAY = 10
 TARGET_UPDATE = 10
 
 # Get number of actions from gym action space
-n_obs = 4  # posx, posy, velx, vely, angle, angleVel, leg1contact, leg2contact
-n_actions = env.action_space.n
+n_obs = env.observation_space.shape[0]  # posx, posy, velx, vely, angle, angleVel, leg1contact, leg2contact
+n_actions = env.action_space.shape[0]  # ...
 
-policy_net = FCN([n_obs, 2 * (n_obs + n_actions), n_actions]).to(device)
-target_net = FCN([n_obs, 2 * (n_obs + n_actions), n_actions]).to(device)
+policy_net = FCN([n_obs, 5 * (n_obs + n_actions), n_actions]).to(device)
+# print(env.observation_space.shape, n_actions, policy_net)
+target_net = FCN([n_obs, 5 * (n_obs + n_actions), n_actions]).to(device)
 target_net.load_state_dict(policy_net.state_dict())
 target_net.eval()
 
-optimizer = optim.RMSprop(policy_net.parameters())
+optimizer = optim.RMSprop(policy_net.parameters(), lr=0.0001)
 
 
 def epsilon_greedy(state, epsilon_greedy_annealing_step):
@@ -66,9 +67,9 @@ def epsilon_greedy(state, epsilon_greedy_annealing_step):
 
     if random.random() > eps_threshold:
         with torch.no_grad():
-            return int(policy_net(torch.tensor(state, dtype=torch.long)))
+            return policy_net(torch.tensor(state)).numpy()
     else:
-        return random.randrange(n_actions)
+        return env.action_space.sample()
 
 
 def optimize_model():
@@ -107,7 +108,7 @@ def optimize_model():
     # expected state value or 0 in case the state was final.
     next_state_values = torch.zeros(BATCH_SIZE, device=device)
     next_state_values[non_final_mask] = target_net(non_final_next_states) \
-        .max(1)[0].detach()
+        .max(1)[0].detach() <<<<<------ this is the problem - it's taking a maximum over a discrete space, but we can't do that for a continuous problem.
     # Compute the expected Q values
     expected_state_action_values = (next_state_values * GAMMA) + reward_batch
 
@@ -127,8 +128,6 @@ def optimize_model():
 epsilon_greedy_annealing_step = 0
 for episode in range(1000):
     prev_obs = env.reset()
-    reward = done = info = None
-    env.render()
 
     totalreward = 0
 
@@ -139,15 +138,16 @@ for episode in range(1000):
 
         obs, reward, done, _ = env.step(action)
         totalreward += reward
-        env.render()
 
         memory.append((prev_obs, action, obs, reward))
         prev_obs = obs
 
-        print(memory)
+        # print(memory)
 
         optimize_model()
 
+        if t % 100 == 99:
+            env.render()
         if done:
             print(f"Episode {episode} done after {t+1} steps, total reward {totalreward}")
             break
