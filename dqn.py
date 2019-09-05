@@ -42,23 +42,23 @@ class FCN(nn.Module):
 env = EchoEnv()
 
 BATCH_SIZE = 128
-GAMMA = 0.999
+GAMMA = 0.0
 EPS_START = 0.9
 EPS_END = 0.05
-EPS_DECAY = 10
+EPS_DECAY = 100
 TARGET_UPDATE = 10
 
 # Get number of actions from gym action space
 n_obs = env.observation_space.shape[0]  # posx, posy, velx, vely, angle, angleVel, leg1contact, leg2contact
-n_actions = env.action_space.shape[0]  # ...
+n_actions = env.action_space.n  # ...
 
-policy_net = FCN([n_obs, 5 * (n_obs + n_actions), n_actions]).to(device)
-# print(env.observation_space.shape, n_actions, policy_net)
-target_net = FCN([n_obs, 5 * (n_obs + n_actions), n_actions]).to(device)
+policy_net = FCN([n_obs, 2 * (n_obs + n_actions), n_actions]).to(device)
+print(policy_net)
+target_net = FCN([n_obs, 2 * (n_obs + n_actions), n_actions]).to(device)
 target_net.load_state_dict(policy_net.state_dict())
 target_net.eval()
 
-optimizer = optim.RMSprop(policy_net.parameters(), lr=0.0001)
+optimizer = optim.RMSprop(policy_net.parameters(), lr=0.1)
 
 
 def epsilon_greedy(state, epsilon_greedy_annealing_step):
@@ -67,7 +67,7 @@ def epsilon_greedy(state, epsilon_greedy_annealing_step):
 
     if random.random() > eps_threshold:
         with torch.no_grad():
-            return policy_net(torch.tensor(state)).numpy()
+            return torch.argmax(policy_net(torch.tensor(state))).item()
     else:
         return env.action_space.sample()
 
@@ -83,39 +83,28 @@ def optimize_model():
     # Transpose the batch (see https://stackoverflow.com/a/19343/3343043 for
     # detailed explanation). This converts batch-array of Transitions
     # to Transition of batch-arrays.
-    batch = Transition(*zip(*transitions))
-
-    # Compute a mask of non-final states and concatenate the batch elements
-    # (a final state would've been the one after which simulation ended)
-    non_final_mask = torch.tensor(tuple(map(lambda s: s is not None,
-                                            batch.obs)), device=device,
-                                  dtype=torch.uint8)
-    non_final_next_states = torch.tensor([s for s in batch.obs
-                                         if s is not None])
-    state_batch = torch.tensor(batch.prev_obs)
-    action_batch = torch.tensor(batch.action)
-    reward_batch = torch.tensor(batch.reward)
+    batch = Transition(*[torch.tensor(x) for x in zip(*transitions)])
 
     # Compute Q(s_t, a) - the model computes Q(s_t), then we select the
     # columns of actions taken. These are the actions which would've been taken
     # for each batch state according to policy_net
-    state_action_values = policy_net(state_batch)
+    Q = policy_net(batch.prev_obs)[:,batch.action]
 
     # Compute V(s_{t+1}) for all next states.
     # Expected values of actions for non_final_next_states are computed based
     # on the "older" target_net; selecting their best reward with max(1)[0].
     # This is merged based on the mask, such that we'll have either the
     # expected state value or 0 in case the state was final.
-    next_state_values = torch.zeros(BATCH_SIZE, device=device)
-    next_state_values[non_final_mask] = target_net(non_final_next_states) \
-        .max(1)[0].detach() <<<<<------ this is the problem - it's taking a maximum over a discrete space, but we can't do that for a continuous problem.
+    # <-- I believe that this leader-follower thing is for the sake of training stability. -->
+    Q_next_max = target_net(batch.obs).max(1)[0].detach()
     # Compute the expected Q values
-    expected_state_action_values = (next_state_values * GAMMA) + reward_batch
+
+    Q_expected = batch.reward + GAMMA * Q_next_max
+
+    #print(Q.shape, Q_next_max.shape, Q_expected.shape)
 
     # Compute Huber loss
-    # This will emit a warning about broadcasting, this is expected.
-    loss = F.smooth_l1_loss(state_action_values,
-                            expected_state_action_values.unsqueeze(1))
+    loss = F.smooth_l1_loss(Q, Q_expected)
 
     # Optimize the model
     optimizer.zero_grad()
@@ -146,7 +135,7 @@ for episode in range(1000):
 
         optimize_model()
 
-        if t % 100 == 99:
+        if (t + 1) % 10 == 0:
             env.render()
         if done:
             print(f"Episode {episode} done after {t+1} steps, total reward {totalreward}")
