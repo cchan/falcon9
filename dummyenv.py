@@ -19,13 +19,13 @@ class EchoEnv(gym.Env, EzPickle):
 
     def reset(self):
         self.squared_error = None
-        self.state = self.observation_space.sample()
+        self.state = np.array([2, 4], dtype=np.float32) #self.observation_space.sample()
         self.steps_taken = 0
         return self.state
 
     def step(self, action):
         self.squared_error = (self.state[0].item() - action)**2
-        self.state = self.observation_space.sample()
+        self.state = np.array([0, 4], dtype=np.float32) #self.observation_space.sample()
         self.steps_taken += 1
         if self.steps_taken > self.STEP_LIMIT:
             raise EnvironmentError("Episode is over.")

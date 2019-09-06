@@ -45,8 +45,8 @@ BATCH_SIZE = 128
 GAMMA = 0.0
 EPS_START = 0.9
 EPS_END = 0.05
-EPS_DECAY = 100
-TARGET_UPDATE = 10
+EPS_DECAY = 100000
+TARGET_UPDATE = 100
 
 # Get number of actions from gym action space
 n_obs = env.observation_space.shape[0]  # posx, posy, velx, vely, angle, angleVel, leg1contact, leg2contact
@@ -58,7 +58,7 @@ target_net = FCN([n_obs, 2 * (n_obs + n_actions), n_actions]).to(device)
 target_net.load_state_dict(policy_net.state_dict())
 target_net.eval()
 
-optimizer = optim.RMSprop(policy_net.parameters(), lr=0.1)
+optimizer = optim.RMSprop(policy_net.parameters(), lr=0.01)
 
 
 def epsilon_greedy(state, epsilon_greedy_annealing_step):
@@ -88,7 +88,7 @@ def optimize_model():
     # Compute Q(s_t, a) - the model computes Q(s_t), then we select the
     # columns of actions taken. These are the actions which would've been taken
     # for each batch state according to policy_net
-    Q = policy_net(batch.prev_obs)[:,batch.action]
+    Q = policy_net(batch.prev_obs).gather(1, batch.action.unsqueeze(1))
 
     # Compute V(s_{t+1}) for all next states.
     # Expected values of actions for non_final_next_states are computed based
@@ -96,7 +96,7 @@ def optimize_model():
     # This is merged based on the mask, such that we'll have either the
     # expected state value or 0 in case the state was final.
     # <-- I believe that this leader-follower thing is for the sake of training stability. -->
-    Q_next_max = target_net(batch.obs).max(1)[0].detach()
+    Q_next_max = target_net(batch.obs).gather(1, batch.action.unsqueeze(1)).detach()
     # Compute the expected Q values
 
     Q_expected = batch.reward + GAMMA * Q_next_max
@@ -128,10 +128,9 @@ for episode in range(1000):
         obs, reward, done, _ = env.step(action)
         totalreward += reward
 
-        memory.append((prev_obs, action, obs, reward))
+        if len(memory) < 128:
+            memory.append((prev_obs, action, obs, reward))
         prev_obs = obs
-
-        # print(memory)
 
         optimize_model()
 
